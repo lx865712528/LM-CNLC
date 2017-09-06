@@ -108,34 +108,22 @@ class CharRNN(Model):
         optimizer = tf.train.AdamOptimizer(self.lr)
         self.train_op = optimizer.apply_gradients(zip(grads, tvars), global_step=self.global_step)
 
-    def sample(self, sess, chars, vocab, UNK_ID, num=200, prime='The '):
-        state = sess.run(self.cell.zero_state(1, tf.float32))
-        for char in prime[:-1]:
-            x = np.zeros((1, 1))
-            x[0, 0] = vocab.get(char, UNK_ID)
-            feed = {self.input_data: x, self.initial_state: state, self.is_training: False}
-            [state] = sess.run([self.final_state], feed)
-
-        def weighted_pick(weights):
-            t = np.cumsum(weights)
-            s = np.sum(weights)
-            return int(np.searchsorted(t, np.random.rand(1) * s))
-
-        ret = prime
-        char = prime[-1]
-        for _ in range(num):
-            x = np.zeros((1, 1))
-            x[0, 0] = vocab[char]
-            feed = {self.input_data: x, self.initial_state: state, self.is_training: False}
-            [probs, state] = sess.run([self.probs, self.final_state], feed)
-            p = probs[0]
-
-            sample = weighted_pick(p)
-
-            pred = chars[sample]
-            ret += pred
-            char = pred
-        return ret
+    def go_step(self, sess, state, little_step):
+        '''
+        State change
+        :param sess: tf session
+        :param state: model state
+        :param little_step: int for next char
+        :return: 1d probability tensor, loss and destination state
+        '''
+        little_step_data = np.zeros(shape=(1, 1))
+        little_step_data[0][0] = little_step
+        # assert type(little_step) == np.ndarray and little_step.shape == (1, 1)
+        feed = {self.input_data: little_step_data, self.initial_state: state, self.is_training: False}
+        fetchs = {"probs": self.probs, "loss": self.loss, "state": self.final_state}
+        res = sess.run(fetchs, feed)
+        res["probs"] = res["probs"][0]
+        return res
 
 
 if __name__ == "__main__":

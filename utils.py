@@ -6,7 +6,6 @@ import os
 import re
 
 import numpy as np
-import tensorflow as tf
 
 PAD = "_PAD"
 GO = "_GO"
@@ -18,20 +17,12 @@ UNK_ID = 3
 START_VOCAB = [PAD, GO, EOS, UNK, SPACE, NEW_LINE]
 
 
-def init_env(GPU_ID):
-    os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-    os.environ['CUDA_VISIBLE_DEVICES'] = str(GPU_ID)
-    config = tf.ConfigProto()
-    config.gpu_options.allow_growth = True
-
-
 def normalize_unicodes(text):
     '''
     正规化中文文本
     :param text: 文本
     :return: 文本
     '''
-    text = text.replace("\n", "")
     text = normalize_punctuation(text)
     text = "".join([Q2B(c) for c in list(text)])
     return text
@@ -129,23 +120,25 @@ class TextLoader():
         :param tensor_file: 保存的数据
         :return:
         '''
+        train_data = []
+        counter = collections.Counter()
         with open(input_file, "r", encoding=self.encoding) as f:
-            train_data = f.read()  # 长字符串
-            train_data = normalize_unicodes(train_data)  # 全角转半角 标点归一化
-
-        counter = collections.Counter(train_data)
+            for line in f:
+                line = list(normalize_unicodes(line.strip()))
+                line = [GO] + line + [EOS]
+                train_data.extend(line)
+                counter.update(line)
         count_pairs = sorted(counter.items(), key=lambda x: x[1], reverse=True)
         threshold = 10
         self.chars, counts = zip(*count_pairs)  # 分离字符表
         self.chars = START_VOCAB + [c for i, c in enumerate(self.chars)
-                                    if c not in START_VOCAB and counts[i] > threshold]  # 过滤小频数 加上START
+                                    if c not in START_VOCAB and counts[i] > threshold]
         self.vocab_size = len(self.chars)
         self.vocab = dict(zip(self.chars, range(len(self.chars))))
         with open(vocab_file, 'wb') as f:
             cPickle.dump(self.chars, f)
-        unk_index = len(self.vocab)
-        self.tensor = np.array([self.vocab.get(c, unk_index) for c in train_data], dtype=np.int64)
-        train_size = int(self.tensor.shape[0] * 0.9)
+        self.tensor = np.array([self.vocab.get(c, UNK_ID) for c in train_data], dtype=np.int64)
+        train_size = int(self.tensor.shape[0] * 0.999)
         self.valid = self.tensor[train_size:]
         self.train = self.tensor[:train_size]
         np.save(tensor_file, self.tensor)
@@ -157,7 +150,7 @@ class TextLoader():
         self.vocab_size = len(self.chars)
         self.vocab = dict(zip(self.chars, range(len(self.chars))))
         self.tensor = np.load(tensor_file)
-        train_size = int(self.tensor.shape[0] * 0.9)
+        train_size = int(self.tensor.shape[0] * 0.999)
         self.valid = self.tensor[train_size:]
         self.train = self.tensor[:train_size]
         print("Load data done!")
@@ -172,6 +165,8 @@ class TextLoader():
 
         self.train = self.train[:self.num_batches * self.batch_size * self.seq_length]
         self.valid = self.valid[:self.num_valid_batches * self.batch_size * self.seq_length]
+        print("Training data size %d" % len(self.train))
+        print("Validation data size %d" % len(self.valid))
         xdata = self.train
         ydata = np.copy(self.train)
         ydata[:-1] = xdata[1:]

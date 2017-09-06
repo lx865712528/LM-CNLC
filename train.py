@@ -20,7 +20,7 @@ flags.DEFINE_integer("batch_size", 64, "The size of batch [64]")
 flags.DEFINE_integer("rnn_size", 512, "RNN size [512]")
 flags.DEFINE_integer("layer_depth", 2, "Number of layers for RNN [2]")
 flags.DEFINE_integer("seq_length", 25, "The # of timesteps to unroll for [25]")
-flags.DEFINE_float("learning_rate", 1e-3, "Learning rate [1e-3]")
+flags.DEFINE_float("learning_rate", 5e-3, "Learning rate [5e-3]")
 flags.DEFINE_string("rnn_type", "GRU", "RNN type [RWA, RAN, LSTM, GRU]")
 flags.DEFINE_float("keep_prob", 0.5, "Dropout rate [0.5]")
 flags.DEFINE_float("grad_clip", 5.0, "Grad clip [5.0]")
@@ -35,7 +35,7 @@ flags.DEFINE_boolean("export", False, "Export embedding")
 FLAGS = flags.FLAGS
 
 
-def run_epochs(sess, x, y, model, is_training=True):
+def run_minibatches(sess, x, y, model, is_training=True):
     start = time.time()
     feed = {model.input_data: x, model.targets: y, model.is_training: is_training}
 
@@ -62,15 +62,15 @@ def main(_):
 
     data_loader = TextLoader(os.path.join(FLAGS.data_dir, FLAGS.dataset_name),
                              FLAGS.batch_size, FLAGS.seq_length)
-    vocab_size = data_loader.vocab_size + 1
+    vocab_size = data_loader.vocab_size
 
-    with tf.variable_scope('model'):
+    with tf.variable_scope(FLAGS.dataset_name):
         train_model = CharRNN(vocab_size, FLAGS.batch_size, FLAGS.rnn_size,
                               FLAGS.layer_depth, FLAGS.num_units, FLAGS.rnn_type,
                               FLAGS.seq_length, FLAGS.keep_prob,
                               FLAGS.grad_clip)
 
-    with tf.variable_scope('model', reuse=True):
+    with tf.variable_scope(FLAGS.dataset_name, reuse=True):
         valid_model = CharRNN(vocab_size, FLAGS.batch_size, FLAGS.rnn_size,
                               FLAGS.layer_depth, FLAGS.num_units, FLAGS.rnn_type,
                               FLAGS.seq_length, FLAGS.keep_prob,
@@ -100,24 +100,26 @@ def main(_):
             with open(FLAGS.log_dir + "/" + FLAGS.dataset_name + "_hyperparams.pkl", 'wb') as f:
                 cPickle.dump(FLAGS.__flags, f)
             for e in range(FLAGS.num_epochs):
-                data_loader.reset_batch_pointer()
                 sess.run(tf.assign(train_model.lr, FLAGS.learning_rate))
-                for b in range(data_loader.num_batches):
+                for b in range(min(data_loader.num_batches, 5000)):
                     x, y = data_loader.next_batch()
-                    res, time_batch = run_epochs(sess, x, y, train_model)
+                    if data_loader.pointer >= data_loader.num_batches:
+                        data_loader.reset_batch_pointer()
+                    res, time_batch = run_minibatches(sess, x, y, train_model)
                     train_loss = res["loss"]
                     train_perplexity = np.exp(train_loss)
                     iterate = e * data_loader.num_batches + b
                     print(
                         "{}/{} (epoch {}) loss = {:.2f}({:.2f}) perplexity(train/valid) = {:.2f}({:.2f}) time/batch = {:.2f} chars/sec = {:.2f}k" \
-                            .format(e * data_loader.num_batches + b,
-                                    FLAGS.num_epochs * data_loader.num_batches,
-                                    e, train_loss, valid_loss, train_perplexity, valid_perplexity,
+                            .format(e * data_loader.num_batches + b, FLAGS.num_epochs * data_loader.num_batches,
+                                    e,
+                                    train_loss, valid_loss,
+                                    train_perplexity, valid_perplexity,
                                     time_batch, (FLAGS.batch_size * FLAGS.seq_length) / time_batch / 1000))
                 valid_loss = 0
                 for vb in range(data_loader.num_valid_batches):
-                    res, valid_time_batch = run_epochs(sess, data_loader.x_valid[vb], data_loader.y_valid[vb],
-                                                       valid_model, False)
+                    res, valid_time_batch = run_minibatches(sess, data_loader.x_valid[vb], data_loader.y_valid[vb],
+                                                            valid_model, False)
                     valid_loss += res["loss"]
                 valid_loss = valid_loss / data_loader.num_valid_batches
                 valid_perplexity = np.exp(valid_loss)
