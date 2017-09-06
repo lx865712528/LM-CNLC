@@ -9,7 +9,7 @@ import numpy as np
 import tensorflow as tf
 
 from models.charrnn import CharRNN
-from utils import TextLoader, init_env
+from utils import TextLoader
 
 pp = pprint.PrettyPrinter()
 
@@ -32,7 +32,6 @@ flags.DEFINE_string("data_dir", "data", "The name of data directory [data]")
 flags.DEFINE_string("log_dir", "log", "Log directory [log]")
 flags.DEFINE_string("checkpoint_dir", "checkpoint", "Directory name to save the checkpoints [checkpoint]")
 flags.DEFINE_boolean("export", False, "Export embedding")
-flags.DEFINE_integer("gpu", 0, "Use GPU [0]")
 FLAGS = flags.FLAGS
 
 
@@ -56,8 +55,6 @@ def run_epochs(sess, x, y, model, is_training=True):
 
 def main(_):
     pp.pprint(FLAGS.__flags)
-
-    init_env(FLAGS.gpu)
 
     if not os.path.exists(FLAGS.checkpoint_dir):
         print(" [*] Creating checkpoint directory...")
@@ -100,7 +97,7 @@ def main(_):
         else:
             if not os.path.exists(FLAGS.log_dir):
                 os.makedirs(FLAGS.log_dir)
-            with open(FLAGS.log_dir + "/hyperparams.pkl", 'wb') as f:
+            with open(FLAGS.log_dir + "/" + FLAGS.dataset_name + "_hyperparams.pkl", 'wb') as f:
                 cPickle.dump(FLAGS.__flags, f)
             for e in range(FLAGS.num_epochs):
                 data_loader.reset_batch_pointer()
