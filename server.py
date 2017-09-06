@@ -1,12 +1,13 @@
 # -*- coding: utf-8 -*-
 
+import math
 import pickle
 
 import jieba
 import tensorflow as tf
 
 from models.charrnn import CharRNN
-from utils import GO, EOS, UNK_ID
+from utils import GO, EOS, UNK_ID, START_VOCAB
 
 
 class LanguageCorrector():
@@ -14,7 +15,7 @@ class LanguageCorrector():
     Natural Language Correction Model
     '''
 
-    def __init__(self, fw_hyp_path, bw_hyp_path, fw_vocab_path, bw_vocab_path, dictionary_path, threshold=4):
+    def __init__(self, fw_hyp_path, bw_hyp_path, fw_vocab_path, bw_vocab_path, dictionary_path, threshold=-20):
         '''
         Load solver
         :param fw_hyp_path: forward model hyperparam path
@@ -25,8 +26,7 @@ class LanguageCorrector():
         :param threshold: threshold for model
         '''
         jieba.load_userdict(dictionary_path)
-
-        self.threshold = 4
+        self.threshold = threshold
 
         # load configs
         with open(fw_hyp_path, 'rb') as f:
@@ -44,21 +44,49 @@ class LanguageCorrector():
             self.bw_vocab_size = len(self.bw_vocab_i2c)
             self.bw_vocab_c2i = dict(zip(self.bw_vocab_i2c, range(self.bw_vocab_size)))
 
-        # load models
-        with tf.variable_scope(fw_hyp_config['dataset_name']):
-            self.fw_model = CharRNN(self.fw_vocab_size, 1, fw_hyp_config['rnn_size'], fw_hyp_config['layer_depth'],
-                                    fw_hyp_config['num_units'], 1, fw_hyp_config['keep_prob'],
-                                    fw_hyp_config['grad_clip'])
-        with tf.Session() as self.fw_lm_sess:
-            ckpt = tf.train.get_checkpoint_state(fw_hyp_config['checkpoint_dir'] + '/' + fw_hyp_config['dataset_name'])
-            tf.train.Saver().restore(self.fw_lm_sess, ckpt.model_checkpoint_path)
-        with tf.variable_scope(bw_hyp_config['dataset_name']):
-            self.bw_model = CharRNN(self.bw_vocab_size, 1, bw_hyp_config['rnn_size'], bw_hyp_config['layer_depth'],
-                                    bw_hyp_config['num_units'], 1, bw_hyp_config['keep_prob'],
-                                    bw_hyp_config['grad_clip'])
-        with tf.Session() as self.bw_lm_sess:
-            ckpt = tf.train.get_checkpoint_state(bw_hyp_config['checkpoint_dir'] + '/' + bw_hyp_config['dataset_name'])
-            tf.train.Saver().restore(self.bw_lm_sess, ckpt.model_checkpoint_path)
+        # load fwmodel
+        g1 = tf.Graph()
+        self.fw_sess = tf.Session(graph=g1)
+        with self.fw_sess.as_default():
+            with g1.as_default():
+                with tf.variable_scope(fw_hyp_config['dataset_name']):
+                    self.fw_model = CharRNN(vocab_size=self.fw_vocab_size,
+                                            batch_size=1,
+                                            rnn_size=fw_hyp_config['rnn_size'],
+                                            layer_depth=fw_hyp_config['layer_depth'],
+                                            num_units=fw_hyp_config['num_units'],
+                                            seq_length=1,
+                                            keep_prob=fw_hyp_config['keep_prob'],
+                                            grad_clip=fw_hyp_config['grad_clip'],
+                                            rnn_type=fw_hyp_config['rnn_type'])
+                tf.global_variables_initializer().run()
+                ckpt = tf.train.get_checkpoint_state(
+                    bw_hyp_config['checkpoint_dir'] + '/' + bw_hyp_config['dataset_name'])
+                saver = tf.train.import_meta_graph(ckpt.model_checkpoint_path + ".meta", clear_devices=True)
+                saver.restore(self.fw_sess, ckpt.model_checkpoint_path)
+        print("fwmodel done!")
+
+        # load bwmodel
+        g2 = tf.Graph()
+        self.bw_sess = tf.Session(graph=g2)
+        with self.bw_sess.as_default():
+            with g2.as_default():
+                with tf.variable_scope(bw_hyp_config['dataset_name']):
+                    self.bw_model = CharRNN(vocab_size=self.bw_vocab_size,
+                                            batch_size=1,
+                                            rnn_size=bw_hyp_config['rnn_size'],
+                                            layer_depth=bw_hyp_config['layer_depth'],
+                                            num_units=bw_hyp_config['num_units'],
+                                            seq_length=1,
+                                            keep_prob=bw_hyp_config['keep_prob'],
+                                            grad_clip=bw_hyp_config['grad_clip'],
+                                            rnn_type=bw_hyp_config['rnn_type'])
+                tf.global_variables_initializer().run()
+                ckpt = tf.train.get_checkpoint_state(
+                    fw_hyp_config['checkpoint_dir'] + '/' + fw_hyp_config['dataset_name'])
+                saver = tf.train.import_meta_graph(ckpt.model_checkpoint_path + ".meta", clear_devices=True)
+                saver.restore(self.bw_sess, ckpt.model_checkpoint_path)
+        print("bwmodel done!")
 
         # load dictionary
         with open(dictionary_path, "r", encoding="utf-8") as f:
@@ -82,13 +110,11 @@ class LanguageCorrector():
         sz = len(chars)
 
         fw_ints = [self.fw_vocab_c2i.get(c, UNK_ID) for c in chars]
-        bw_ints = [self.bw_vocab_c2i.get(c, UNK_ID) for c in chars]
+        bw_ints = [self.bw_vocab_c2i.get(c, UNK_ID) for c in chars[::-1]]
         fw_probs = []  # 过一个字符后的概率
         bw_probs = []
         fw_losses = []  # 过一个字符后的loss
         bw_losses = []
-        fw_states = []  # 过一个字符后的状态
-        bw_states = []
 
         # find bad guys
         bads_or_not = []
@@ -96,30 +122,36 @@ class LanguageCorrector():
         for i in range(sz):
             bads_or_not.append(False)
         # fw side
-        fw_cnt_state = self.fw_model.cell.zero_state(1, tf.float32)
-        for i in range(sz):
-            res = self.fw_model.go_step(self.fw_lm_sess, fw_cnt_state, fw_ints[i])
-            fw_probs.append(res["probs"])
-            fw_losses.append(res["loss"])
-            fw_states.append(res["state"])
-            fw_cnt_state = res["state"]
+        with self.fw_sess.as_default():
+            with self.fw_sess.graph.as_default():
+                fw_cnt_state = self.fw_sess.run(self.fw_model.cell.zero_state(1, tf.float32))
+                for i in range(sz):
+                    res = self.fw_model.go_step(self.fw_sess, fw_cnt_state, fw_ints[i])
+                    fw_probs.append(res["probs"])
+                    if i + 1 < sz:
+                        fw_losses.append(math.log(res["probs"][fw_ints[i + 1]]))
+                    fw_cnt_state = res["state"]
         # bw side
-        bw_cnt_state = self.bw_model.cell.zero_state(1, tf.float32)
-        for i in range(sz):
-            res = self.bw_model.go_step(self.bw_lm_sess, bw_cnt_state, bw_ints[i])
-            bw_probs.append(res["probs"])
-            bw_losses.append(res["loss"])
-            bw_states.append(res["state"])
-            bw_cnt_state = res["state"]
+        with self.bw_sess.as_default():
+            with self.bw_sess.graph.as_default():
+                bw_cnt_state = self.bw_sess.run(self.bw_model.cell.zero_state(1, tf.float32))
+                for i in range(sz):
+                    res = self.bw_model.go_step(self.bw_sess, bw_cnt_state, bw_ints[i])
+                    bw_probs.append(res["probs"])
+                    if i + 1 < sz:
+                        bw_losses.append(math.log(res["probs"][bw_ints[i + 1]]))
+                    bw_cnt_state = res["state"]
+
         # accumulate loss in each steps
-        for i in range(1, sz):
-            fw_losses[i] += fw_losses[i - 1]
-            bw_losses[i] += bw_losses[i - 1]
+        # for i in range(1, sz - 1):
+        #     fw_losses[i] += fw_losses[i - 1]
+        #     bw_losses[i] += bw_losses[i - 1]
 
         # first view
         for i in range(0, sz - 2):
             t_loss = fw_losses[i] + bw_losses[sz - 3 - i]
-            if t_loss > self.threshold:
+            print(t_loss)
+            if t_loss < self.threshold:
                 bads_or_not[i + 1] = True
                 bad_pos.add(i + 1)
 
@@ -151,12 +183,14 @@ class LanguageCorrector():
             best_ch = ""
             best_score = -1
             for ch in self.fw_vocab_i2c:
+                if ch in START_VOCAB:
+                    continue
                 prob = left_probs_dict[ch] * right_probs_dict[ch]
                 if prob > best_score + 1e-6:
                     best_score = prob
                     best_ch = ch
             chars[p] = best_ch
-        chars = str(chars[1:-1])
+        chars = "".join(chars[1:-1])
         assert len(chars) == len(sentence)
         segs = jieba.cut(chars)
 

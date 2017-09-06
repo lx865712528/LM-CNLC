@@ -56,7 +56,7 @@ class CharRNN(Model):
                                         initializer=tf.truncated_normal_initializer(stddev=1e-4))
             softmax_b = tf.get_variable("softmax_b", [vocab_size])
 
-            def create_cell(device):
+            def create_cell():
                 if rnn_type == "GRU":
                     cell = rnn.GRUCell(rnn_size)
                 elif rnn_type == "LSTM":
@@ -69,11 +69,10 @@ class CharRNN(Model):
                     cell = RWACell(rnn_size)
                 elif rnn_type == "RAN":
                     cell = RANCell(rnn_size, normalize=self.is_training)
-                cell = SwitchableDropoutWrapper(rnn.DeviceWrapper(cell, device="/gpu:{}".format(device)),
-                                                is_train=self.is_training)
+                cell = SwitchableDropoutWrapper(cell, is_train=self.is_training)
                 return cell
 
-            self.cell = cell = rnn.MultiRNNCell([create_cell(i) for i in range(layer_depth)], state_is_tuple=True)
+            self.cell = cell = rnn.MultiRNNCell([create_cell() for _ in range(layer_depth)], state_is_tuple=True)
 
             with tf.device("/cpu:0"):
                 self.embedding = tf.get_variable("embedding", [vocab_size, num_units])
@@ -114,13 +113,13 @@ class CharRNN(Model):
         :param sess: tf session
         :param state: model state
         :param little_step: int for next char
-        :return: 1d probability tensor, loss and destination state
+        :return: 1d probability tensor and destination state
         '''
         little_step_data = np.zeros(shape=(1, 1))
         little_step_data[0][0] = little_step
         # assert type(little_step) == np.ndarray and little_step.shape == (1, 1)
         feed = {self.input_data: little_step_data, self.initial_state: state, self.is_training: False}
-        fetchs = {"probs": self.probs, "loss": self.loss, "state": self.final_state}
+        fetchs = {"probs": self.probs, "state": self.final_state}
         res = sess.run(fetchs, feed)
         res["probs"] = res["probs"][0]
         return res
