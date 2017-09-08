@@ -110,10 +110,9 @@ def main(_):
                     res, time_batch = run_minibatches(sess, x, y, train_model)
                     train_loss = res["loss"]
                     train_perplexity = np.exp(train_loss)
-                    iterate = e * data_loader.num_batches + b
                     print(
                         "{}/{} (epoch {}) loss = {:.2f}({:.2f}) perplexity(train/valid) = {:.2f}({:.2f}) time/batch = {:.2f} chars/sec = {:.2f}k" \
-                            .format(e * data_loader.num_batches + b, FLAGS.num_epochs * data_loader.num_batches,
+                            .format(data_loader.pointer, data_loader.num_batches,
                                     e,
                                     train_loss, valid_loss,
                                     train_perplexity, valid_perplexity,
@@ -128,10 +127,10 @@ def main(_):
                 print("### valid_perplexity = {:.2f}, time/batch = {:.2f}".format(valid_perplexity, valid_time_batch))
                 if valid_perplexity < best_val_pp:
                     best_val_pp = valid_perplexity
-                    best_val_epoch = iterate
+                    best_val_epoch = e
                     train_model.save(sess, FLAGS.checkpoint_dir, FLAGS.dataset_name)
                     print("model saved to {}".format(FLAGS.checkpoint_dir))
-                if iterate - best_val_epoch > FLAGS.early_stopping:
+                if e - best_val_epoch > FLAGS.early_stopping:
                     print('Total time: {}'.format(time.time() - start))
                     break
 
