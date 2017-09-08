@@ -4,6 +4,7 @@ import math
 import pickle
 
 import jieba
+import numpy as np
 import tensorflow as tf
 
 from models.charrnn import CharRNN
@@ -107,6 +108,7 @@ class LanguageCorrector():
         :return: corrections
         '''
         chars = [GO] + list(sentence) + [EOS]
+        bw_chars = chars[::-1]
         sz = len(chars)
 
         fw_ints = [self.fw_vocab_c2i.get(c, UNK_ID) for c in chars]
@@ -130,6 +132,7 @@ class LanguageCorrector():
                     fw_probs.append(res["probs"])
                     if i + 1 < sz:
                         fw_losses.append(math.log(res["probs"][fw_ints[i + 1]]))
+                        print("%s --> %s: %lf" % (chars[i], chars[i + 1], res["probs"][fw_ints[i + 1]]))
                     fw_cnt_state = res["state"]
         # bw side
         with self.bw_sess.as_default():
@@ -140,16 +143,18 @@ class LanguageCorrector():
                     bw_probs.append(res["probs"])
                     if i + 1 < sz:
                         bw_losses.append(math.log(res["probs"][bw_ints[i + 1]]))
+                        print("%s --> %s: %lf" % (bw_chars[i], bw_chars[i + 1], res["probs"][bw_ints[i + 1]]))
                     bw_cnt_state = res["state"]
 
         # accumulate loss in each steps
-        # for i in range(1, sz - 1):
-        #     fw_losses[i] += fw_losses[i - 1]
-        #     bw_losses[i] += bw_losses[i - 1]
+        for i in range(1, sz - 1):
+            fw_losses[i] += fw_losses[i - 1]
+            bw_losses[i] += bw_losses[i - 1]
 
         # first view
-        for i in range(0, sz - 2):
-            t_loss = fw_losses[i] + bw_losses[sz - 3 - i]
+        for i in range(1, sz - 2):
+            print(fw_losses[i], bw_losses[sz - 3 - i])
+            t_loss = fw_losses[i] / (i) + bw_losses[sz - 3 - i] / (sz - i - 2)
             print(t_loss)
             if t_loss < self.threshold:
                 bads_or_not[i + 1] = True
@@ -174,20 +179,17 @@ class LanguageCorrector():
 
         # find candidates
         for p in bad_pos:
-            left_probs_dict = {}
-            for ch, prob in zip(self.fw_vocab_i2c, fw_probs[p - 1]):
-                left_probs_dict[ch] = prob
-            right_probs_dict = {}
-            for ch, prob in zip(self.bw_vocab_i2c, bw_probs[sz - 3 - p + 1]):
-                right_probs_dict[ch] = prob
+            if not (sz - 1 > p - 2 >= 0 and sz - 1 > sz - 3 - p >= 0):
+                continue
             best_ch = ""
-            best_score = -1
+            best_score = np.NINF
             for ch in self.fw_vocab_i2c:
                 if ch in START_VOCAB:
                     continue
-                prob = left_probs_dict[ch] * right_probs_dict[ch]
-                if prob > best_score + 1e-6:
-                    best_score = prob
+                loss = (fw_losses[p - 2] + math.log(fw_probs[p - 1][self.fw_vocab_c2i[ch]])) / (p + 1) + \
+                       (bw_losses[sz - 3 - p] + math.log(bw_probs[sz - 3 - p + 1][self.fw_vocab_c2i[ch]])) / (sz - p)
+                if loss > best_score + 1e-6:
+                    best_score = loss
                     best_ch = ch
             chars[p] = best_ch
         chars = "".join(chars[1:-1])

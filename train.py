@@ -15,10 +15,10 @@ pp = pprint.PrettyPrinter()
 
 flags = tf.app.flags
 flags.DEFINE_integer("num_epochs", 20, "Epoch to train [20]")
-flags.DEFINE_integer("num_units", 300, "The dimension of char embedding matrix [300]")
-flags.DEFINE_integer("batch_size", 64, "The size of batch [64]")
+flags.DEFINE_integer("num_units", 200, "The dimension of char embedding matrix [200]")
+flags.DEFINE_integer("batch_size", 2048, "The size of batch [2048]")
 flags.DEFINE_integer("rnn_size", 512, "RNN size [512]")
-flags.DEFINE_integer("layer_depth", 2, "Number of layers for RNN [2]")
+flags.DEFINE_integer("layer_depth", 1, "Number of layers for RNN [1]")
 flags.DEFINE_integer("seq_length", 25, "The # of timesteps to unroll for [25]")
 flags.DEFINE_float("learning_rate", 5e-3, "Learning rate [5e-3]")
 flags.DEFINE_string("rnn_type", "GRU", "RNN type [RWA, RAN, LSTM, GRU]")
@@ -100,11 +100,11 @@ def main(_):
             with open(FLAGS.log_dir + "/" + FLAGS.dataset_name + "_hyperparams.pkl", 'wb') as f:
                 cPickle.dump(FLAGS.__flags, f)
             for e in range(FLAGS.num_epochs):
+                data_loader.reset_batch_pointer()
                 sess.run(tf.assign(train_model.lr, FLAGS.learning_rate))
-                for b in range(min(data_loader.num_batches, 5000)):
+                FLAGS.learning_rate /= 2
+                for b in range(min(data_loader.num_batches, 50000)):
                     x, y = data_loader.next_batch()
-                    if data_loader.pointer >= data_loader.num_batches:
-                        data_loader.reset_batch_pointer()
                     res, time_batch = run_minibatches(sess, x, y, train_model)
                     train_loss = res["loss"]
                     train_perplexity = np.exp(train_loss)
