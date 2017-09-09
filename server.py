@@ -16,7 +16,8 @@ class LanguageCorrector():
     Natural Language Correction Model
     '''
 
-    def __init__(self, fw_hyp_path, bw_hyp_path, fw_vocab_path, bw_vocab_path, dictionary_path, threshold=-20):
+    def __init__(self, fw_hyp_path, bw_hyp_path, fw_vocab_path, bw_vocab_path, fw_model_path, bw_model_path,
+                 dictionary_path):
         '''
         Load solver
         :param fw_hyp_path: forward model hyperparam path
@@ -27,7 +28,6 @@ class LanguageCorrector():
         :param threshold: threshold for model
         '''
         jieba.load_userdict(dictionary_path)
-        self.threshold = threshold
 
         # load configs
         with open(fw_hyp_path, 'rb') as f:
@@ -60,12 +60,11 @@ class LanguageCorrector():
                                             keep_prob=fw_hyp_config['keep_prob'],
                                             grad_clip=fw_hyp_config['grad_clip'],
                                             rnn_type=fw_hyp_config['rnn_type'])
-                tf.global_variables_initializer().run()
-                ckpt = tf.train.get_checkpoint_state(
-                    bw_hyp_config['checkpoint_dir'] + '/' + bw_hyp_config['dataset_name'])
-                saver = tf.train.import_meta_graph(ckpt.model_checkpoint_path + ".meta", clear_devices=True)
-                saver.restore(self.fw_sess, ckpt.model_checkpoint_path)
-        print("fwmodel done!")
+                ckpt = tf.train.get_checkpoint_state(fw_model_path +
+                                                     '/' +
+                                                     fw_hyp_config['dataset_name'])
+                tf.train.Saver().restore(self.fw_sess, ckpt.model_checkpoint_path)
+        # print("fwmodel done!")
 
         # load bwmodel
         g2 = tf.Graph()
@@ -82,12 +81,11 @@ class LanguageCorrector():
                                             keep_prob=bw_hyp_config['keep_prob'],
                                             grad_clip=bw_hyp_config['grad_clip'],
                                             rnn_type=bw_hyp_config['rnn_type'])
-                tf.global_variables_initializer().run()
-                ckpt = tf.train.get_checkpoint_state(
-                    fw_hyp_config['checkpoint_dir'] + '/' + fw_hyp_config['dataset_name'])
-                saver = tf.train.import_meta_graph(ckpt.model_checkpoint_path + ".meta", clear_devices=True)
-                saver.restore(self.bw_sess, ckpt.model_checkpoint_path)
-        print("bwmodel done!")
+                ckpt = tf.train.get_checkpoint_state(bw_model_path +
+                                                     '/' +
+                                                     bw_hyp_config['dataset_name'])
+                tf.train.Saver().restore(self.bw_sess, ckpt.model_checkpoint_path)
+        # print("bwmodel done!")
 
         # load dictionary
         with open(dictionary_path, "r", encoding="utf-8") as f:
@@ -97,9 +95,10 @@ class LanguageCorrector():
                 line = line.strip()
                 if len(line) == 0:
                     continue
-                self.dictionary.add(line)
-                if self.word_max_length < len(line):
-                    self.word_max_length = len(line)
+                segs = line.split("\t")
+                self.dictionary.add(segs[0])
+                if self.word_max_length < len(segs[0]):
+                    self.word_max_length = len(segs[0])
 
     def correctify(self, sentence):
         '''
@@ -110,13 +109,13 @@ class LanguageCorrector():
         chars = [GO] + list(sentence) + [EOS]
         bw_chars = chars[::-1]
         sz = len(chars)
-
         fw_ints = [self.fw_vocab_c2i.get(c, UNK_ID) for c in chars]
-        bw_ints = [self.bw_vocab_c2i.get(c, UNK_ID) for c in chars[::-1]]
-        fw_probs = []  # 过一个字符后的概率
-        bw_probs = []
-        fw_losses = []  # 过一个字符后的loss
-        bw_losses = []
+        bw_ints = [self.bw_vocab_c2i.get(c, UNK_ID) for c in bw_chars]
+
+        fw_losses = {}  # 过一个字符后的loss
+        bw_losses = {}
+        fw_probs = {}
+        bw_probs = {}
 
         # find bad guys
         bads_or_not = []
@@ -126,39 +125,30 @@ class LanguageCorrector():
         # fw side
         with self.fw_sess.as_default():
             with self.fw_sess.graph.as_default():
-                fw_cnt_state = self.fw_sess.run(self.fw_model.cell.zero_state(1, tf.float32))
-                for i in range(sz):
-                    res = self.fw_model.go_step(self.fw_sess, fw_cnt_state, fw_ints[i])
-                    fw_probs.append(res["probs"])
-                    if i + 1 < sz:
-                        fw_losses.append(math.log(res["probs"][fw_ints[i + 1]]))
-                        print("%s --> %s: %lf" % (chars[i], chars[i + 1], res["probs"][fw_ints[i + 1]]))
-                    fw_cnt_state = res["state"]
+                for i in range(1, sz - 1):
+                    fw_substr_ints = fw_ints[:i + 1]
+                    fw_losses[i], fw_probs[i] = self.fw_model.get_loss(self.fw_sess, fw_substr_ints)
+
         # bw side
         with self.bw_sess.as_default():
             with self.bw_sess.graph.as_default():
-                bw_cnt_state = self.bw_sess.run(self.bw_model.cell.zero_state(1, tf.float32))
-                for i in range(sz):
-                    res = self.bw_model.go_step(self.bw_sess, bw_cnt_state, bw_ints[i])
-                    bw_probs.append(res["probs"])
-                    if i + 1 < sz:
-                        bw_losses.append(math.log(res["probs"][bw_ints[i + 1]]))
-                        print("%s --> %s: %lf" % (bw_chars[i], bw_chars[i + 1], res["probs"][bw_ints[i + 1]]))
-                    bw_cnt_state = res["state"]
-
-        # accumulate loss in each steps
-        for i in range(1, sz - 1):
-            fw_losses[i] += fw_losses[i - 1]
-            bw_losses[i] += bw_losses[i - 1]
+                for i in range(1, sz - 1):
+                    bw_substr_ints = bw_ints[:i + 1]
+                    bw_losses[i], bw_probs[i] = self.bw_model.get_loss(self.bw_sess, bw_substr_ints)
 
         # first view
-        for i in range(1, sz - 2):
-            print(fw_losses[i], bw_losses[sz - 3 - i])
-            t_loss = fw_losses[i] / (i) + bw_losses[sz - 3 - i] / (sz - i - 2)
-            print(t_loss)
-            if t_loss < self.threshold:
-                bads_or_not[i + 1] = True
-                bad_pos.add(i + 1)
+        results = []
+        for i in range(1, sz - 1):
+            # print(fw_losses[i], bw_losses[sz - 1 - i])
+            t_loss = fw_losses[i] + bw_losses[sz - 1 - i]
+            # print(t_loss)
+            # print(chars[:i + 1])
+            results.append([i, t_loss])
+        results = list(sorted(results, key=lambda x: x[1]))
+        for i in range((len(results) + 1) // 2):
+            pos = results[i][0]
+            bads_or_not[pos] = True
+            bad_pos.add(pos)
 
         # second view
         for p in range(sz):
@@ -170,24 +160,41 @@ class LanguageCorrector():
                 for left in range(left_p, right_p + 1):
                     subword = sentence[left - 1:left - 1 + word_len]
                     if subword in self.dictionary:
+                        # print(subword)
                         bads_or_not[p] = False
                         bad_pos.remove(p)
                     if not bads_or_not[p]:
                         break
                 if not bads_or_not[p]:
                     break
+        # print(bad_pos)
 
         # find candidates
         for p in bad_pos:
-            if not (sz - 1 > p - 2 >= 0 and sz - 1 > sz - 3 - p >= 0):
+            if not sz - 3 > p >= 2:
                 continue
             best_ch = ""
             best_score = np.NINF
-            for ch in self.fw_vocab_i2c:
+
+            left_ints = fw_ints[:p]
+            left_sz = len(left_ints)
+            with self.fw_sess.as_default():
+                with self.fw_sess.graph.as_default():
+                    left_loss, left_probs = self.fw_model.get_loss(self.fw_sess, left_ints)
+
+            right_ints = bw_ints[:sz - 1 - p]
+            right_sz = len(right_ints)
+            with self.bw_sess.as_default():
+                with self.bw_sess.graph.as_default():
+                    right_loss, right_probs = self.bw_model.get_loss(self.bw_sess, right_ints)
+
+            for ic, ch in enumerate(self.fw_vocab_i2c):
                 if ch in START_VOCAB:
                     continue
-                loss = (fw_losses[p - 2] + math.log(fw_probs[p - 1][self.fw_vocab_c2i[ch]])) / (p + 1) + \
-                       (bw_losses[sz - 3 - p] + math.log(bw_probs[sz - 3 - p + 1][self.fw_vocab_c2i[ch]])) / (sz - p)
+
+                loss = (left_loss * left_sz + math.log(left_probs[ic])) / (left_sz + 1) + \
+                       (right_loss * right_sz + math.log(right_probs[self.bw_vocab_c2i[ch]])) / (right_sz + 1)
+
                 if loss > best_score + 1e-6:
                     best_score = loss
                     best_ch = ch

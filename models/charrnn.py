@@ -1,4 +1,5 @@
 import inspect
+import math
 
 import numpy as np
 import tensorflow as tf
@@ -117,12 +118,23 @@ class CharRNN(Model):
         '''
         little_step_data = np.zeros(shape=(1, 1))
         little_step_data[0][0] = little_step
-        # assert type(little_step) == np.ndarray and little_step.shape == (1, 1)
         feed = {self.input_data: little_step_data, self.initial_state: state, self.is_training: False}
         fetchs = {"probs": self.probs, "state": self.final_state}
         res = sess.run(fetchs, feed)
         res["probs"] = res["probs"][0]
         return res
+
+    def get_loss(self, sess, fw_ints):
+        sz = len(fw_ints)
+        loss = 0.0
+        fw_cnt_state = sess.run(self.cell.zero_state(1, tf.float32))
+        for i in range(sz - 1):
+            res = self.go_step(sess, fw_cnt_state, fw_ints[i])
+            loss += math.log(res["probs"][fw_ints[i + 1]])
+            fw_cnt_state = res["state"]
+        loss = loss / sz
+        res = self.go_step(sess, fw_cnt_state, fw_ints[sz - 1])
+        return loss, res["probs"]
 
 
 if __name__ == "__main__":
