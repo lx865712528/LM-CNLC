@@ -171,7 +171,7 @@ class LanguageCorrector():
 
         # find candidates
         for p in bad_pos:
-            if not sz - 3 > p >= 2:
+            if not sz - 2 >= p >= 1:
                 continue
             best_ch = ""
             best_score = np.NINF
