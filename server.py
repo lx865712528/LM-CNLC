@@ -17,7 +17,7 @@ class LanguageCorrector():
     '''
 
     def __init__(self, fw_hyp_path, bw_hyp_path, fw_vocab_path, bw_vocab_path, fw_model_path, bw_model_path,
-                 dictionary_path):
+                 dictionary_path, threshold=math.exp(-7.0)):
         '''
         Load solver
         :param fw_hyp_path: forward model hyperparam path
@@ -28,6 +28,9 @@ class LanguageCorrector():
         :param threshold: threshold for model
         '''
         jieba.load_userdict(dictionary_path)
+
+        self.threshold = np.log(threshold)
+        print(self.threshold)
 
         # load configs
         with open(fw_hyp_path, 'rb') as f:
@@ -146,9 +149,11 @@ class LanguageCorrector():
             results.append([i, t_loss])
         results = list(sorted(results, key=lambda x: x[1]))
         for i in range((len(results) + 1) // 2):
-            pos = results[i][0]
-            bads_or_not[pos] = True
-            bad_pos.add(pos)
+            score = results[i][1]
+            if score < self.threshold:
+                pos = results[i][0]
+                bads_or_not[pos] = True
+                bad_pos.add(pos)
 
         # second view
         for p in range(sz):
