@@ -100,13 +100,11 @@ def main(_):
             with open(FLAGS.log_dir + "/" + FLAGS.dataset_name + "_hyperparams.pkl", 'wb') as f:
                 cPickle.dump(FLAGS.__flags, f)
             for e in range(FLAGS.num_epochs):
-                # data_loader.reset_batch_pointer()
+                data_loader.reset_batch_pointer()
                 sess.run(tf.assign(train_model.lr, FLAGS.learning_rate))
                 FLAGS.learning_rate /= 2
-                for b in range(min(data_loader.num_batches, 1000)):
+                for b in range(data_loader.num_batches):
                     x, y = data_loader.next_batch()
-                    if data_loader.pointer >= data_loader.num_batches:
-                        data_loader.reset_batch_pointer()
                     res, time_batch = run_minibatches(sess, x, y, train_model)
                     train_loss = res["loss"]
                     train_perplexity = np.exp(train_loss)

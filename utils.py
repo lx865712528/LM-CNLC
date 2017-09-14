@@ -15,6 +15,7 @@ SPACE = " "
 NEW_LINE = "\n"
 UNK_ID = 3
 START_VOCAB = [PAD, GO, EOS, UNK, SPACE, NEW_LINE]
+ALL_PUNCTUATION = """。◇─（、’'・〜◎﹁▲┼●´‧]︱﹗;？■）「‐《＜※﹕°｣゛□\〔-["′◆~｢﹞【·〃–＞『．“>﹂：》/—○	；〉】」”∼﹑﹝﹣﹔•―︰！』│ㄧ‘﹖╱･−<〕) ～ー(〈|╲"""
 
 
 def normalize_unicodes(text):

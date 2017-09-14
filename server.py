@@ -2,13 +2,14 @@
 
 import math
 import pickle
+from string import punctuation
 
 import jieba
 import numpy as np
 import tensorflow as tf
 
 from models.charrnn import CharRNN
-from utils import GO, EOS, UNK_ID, START_VOCAB
+from utils import GO, EOS, UNK_ID, START_VOCAB, ALL_PUNCTUATION
 
 
 class LanguageCorrector():
@@ -17,7 +18,7 @@ class LanguageCorrector():
     '''
 
     def __init__(self, fw_hyp_path, bw_hyp_path, fw_vocab_path, bw_vocab_path, fw_model_path, bw_model_path,
-                 dictionary_path, threshold=math.exp(-7.0)):
+                 dictionary_path, threshold=math.exp(-6.8)):
         '''
         Load solver
         :param fw_hyp_path: forward model hyperparam path
@@ -30,7 +31,6 @@ class LanguageCorrector():
         jieba.load_userdict(dictionary_path)
 
         self.threshold = np.log(threshold)
-        print(self.threshold)
 
         # load configs
         with open(fw_hyp_path, 'rb') as f:
@@ -98,10 +98,9 @@ class LanguageCorrector():
                 line = line.strip()
                 if len(line) == 0:
                     continue
-                segs = line.split("\t")
-                self.dictionary.add(segs[0])
-                if self.word_max_length < len(segs[0]):
-                    self.word_max_length = len(segs[0])
+                self.dictionary.add(line)
+                if self.word_max_length < len(line):
+                    self.word_max_length = len(line)
 
     def correctify(self, sentence):
         '''
@@ -194,7 +193,7 @@ class LanguageCorrector():
                     right_loss, right_probs = self.bw_model.get_loss(self.bw_sess, right_ints)
 
             for ic, ch in enumerate(self.fw_vocab_i2c):
-                if ch in START_VOCAB:
+                if ch in START_VOCAB or ch in punctuation or ch in ALL_PUNCTUATION:
                     continue
 
                 loss = (left_loss * left_sz + math.log(left_probs[ic])) / (left_sz + 1) + \
